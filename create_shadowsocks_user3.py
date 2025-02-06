@@ -7,8 +7,8 @@ import re
 import json
 
 # تنظیمات تلگرام
-TELEGRAM_BOT_TOKEN = '8167962294:AAF3Y2AqbvAmHe7WvB4GOzUIGqmxNFSCgQQ'  # توکن ربات تلگرام خود را وارد کنید
-TELEGRAM_CHAT_ID = '71228850'  # شناسه چت تلگرام شما را وارد کنید
+TELEGRAM_BOT_TOKEN = '8167962294:AAF3Y2AqbvAmHe7WvB4GOzUIGqmxNFSCgQQ'  # توکن ربات تلگرام
+TELEGRAM_CHAT_ID = '71228850'  # شناسه تلگرام مدیر
 
 # تنظیمات Docker
 client = docker.from_env()
@@ -31,14 +31,10 @@ def send_telegram_message(message, chat_id=TELEGRAM_CHAT_ID, reply_markup=None):
     response = requests.post(url, data=payload)
     return response.json()
 
-def check_shadowsocks_status(container):
-    """بررسی وضعیت Shadowsocks درون کانتینر"""
-    try:
-        result = container.exec_run("pgrep -f ss-server")
-        return result.exit_code == 0
-    except Exception as e:
-        print(f"⚠️ Error checking Shadowsocks status: {e}")
-        return False
+def count_shadowsocks_containers():
+    """محاسبه تعداد کانتینرهای فعال Shadowsocks"""
+    containers = client.containers.list()
+    return sum(1 for container in containers if container.name.startswith("shadowsocks_"))
 
 def get_next_container_name():
     """دریافت نام بعدی برای کانتینر"""
@@ -53,21 +49,18 @@ def get_next_container_name():
     return f"shadowsocks_{max_number + 1}"
 
 def create_and_check_shadowsocks_container():
-    """ایجاد کانتینر جدید شادوساکس و ارسال اطلاعات به تلگرام"""
+    """ایجاد کانتینر جدید Shadowsocks و ارسال اطلاعات به تلگرام"""
     container_name = get_next_container_name()
-    port = random.randint(20000, 40000)  # انتخاب پورت تصادفی بین 20000 تا 40000
+    port = random.randint(20000, 40000)
     password = generate_random_password()
 
-    # حذف کانتینر قبلی در صورت وجود
     try:
         existing_container = client.containers.get(container_name)
         existing_container.remove(force=True)
-        print(f"Container {container_name} already exists and was removed.")
     except docker.errors.NotFound:
-        print(f"No existing container with name {container_name}.")
+        pass
 
     try:
-        print(f"Creating new container {container_name} on port {port}...")
         container = client.containers.run(
             "shadowsocks/shadowsocks-libev",
             name=container_name,
@@ -84,62 +77,130 @@ def create_and_check_shadowsocks_container():
         )
 
         time.sleep(5)  # زمان برای راه‌اندازی کانتینر
-        logs = container.logs().decode('utf-8')
-        print(f"Container Logs: \n{logs}")
 
-        if check_shadowsocks_status(container):
-            message = f"✅ *Shadowsocks Account Created!*\n\n🔹 *Port:* `{port}`\n🔹 *Password:* `{password}`\n🔹 *Method:* `aes-256-gcm`\n\n⚡ *Enjoy your connection!*"
-            send_telegram_message(message, reply_markup=create_keyboard())
-        else:
-            message = f"⚠️ *Shadowsocks failed to start correctly in container {container_name}*."
-            send_telegram_message(message, reply_markup=create_keyboard())
+        user_message = (
+            f"✅ *Your Shadowsocks Account is Ready!*\n\n"
+            f"🔹 *Code:* `{container_name}`\n"
+            f"🔹 *Port:* `{port}`\n"
+            f"🔹 *Password:* `{password}`\n"
+            f"🔹 *Method:* `aes-256-gcm`\n\n"
+            f"⚡ *Enjoy your connection!*"
+        )
+        send_telegram_message(user_message)
+
+        active_containers = count_shadowsocks_containers()
+
+        admin_message = (
+            f"🛠 **New Shadowsocks Container Created**\n\n"
+            f"🔹 **Container Name:** `{container_name}`\n"
+            f"🔹 **Port:** `{port}`\n"
+            f"🔹 **Password:** `{password}`\n\n"
+            f"📌 *Total Active Shadowsocks Containers:* `{active_containers}`"
+        )
+        send_telegram_message(admin_message, chat_id=TELEGRAM_CHAT_ID)
+
+        # **ارسال دوباره دکمه‌های اصلی بعد از ساخت اکانت**
+        send_telegram_message(
+            "📌 What do you want to do next?",
+            chat_id=TELEGRAM_CHAT_ID,
+            reply_markup=create_keyboard()
+        )
 
     except Exception as e:
-        print(f"❌ Error creating container {container_name}: {e}")
-        send_telegram_message(f"❌ *Error creating container {container_name}:* `{e}`", reply_markup=create_keyboard())
+        send_telegram_message(f"❌ *Error creating container {container_name}:* `{e}`", chat_id=TELEGRAM_CHAT_ID)
 
-def create_keyboard():
-    """ایجاد دکمه برای ساخت اکانت جدید"""
-    keyboard = {
-        "inline_keyboard": [
-            [{"text": "➕ Create Shadowsocks Account", "callback_data": "create_shadowsocks"}]
-        ]
-    }
-    return keyboard
+def list_active_containers():
+    """لیست کانتینرهای Shadowsocks را برای مدیر ارسال می‌کند"""
+    containers = client.containers.list()
+    shadowsocks_containers = [c for c in containers if c.name.startswith("shadowsocks_")]
+    active_count = len(shadowsocks_containers)
+
+    if not shadowsocks_containers:
+        send_telegram_message("⚠️ No active Shadowsocks containers found.", chat_id=TELEGRAM_CHAT_ID)
+        return
+
+    keyboard = {"inline_keyboard": []}
+    message = f"📜 *Active Shadowsocks Containers ({active_count} running):*\n\n"
+    
+    for container in shadowsocks_containers:
+        message += f"🔹 `{container.name}`\n"
+        keyboard["inline_keyboard"].append(
+            [{"text": f"❌ Delete {container.name}", "callback_data": f"delete_{container.name}"}]
+        )
+
+    send_telegram_message(message, chat_id=TELEGRAM_CHAT_ID, reply_markup=keyboard)
+
+def delete_container(container_name):
+    """حذف کانتینر Shadowsocks"""
+    try:
+        container = client.containers.get(container_name)
+        container.remove(force=True)
+        send_telegram_message(f"✅ *Container {container_name} has been deleted successfully!*", chat_id=TELEGRAM_CHAT_ID)
+
+        # **نمایش تعداد کانتینرهای Shadowsocks باقی‌مانده**
+        remaining_count = count_shadowsocks_containers()
+        send_telegram_message(f"📌 *Remaining Shadowsocks containers:* `{remaining_count}`", chat_id=TELEGRAM_CHAT_ID)
+
+        # **ارسال دوباره دکمه‌های اصلی به مدیر**
+        send_telegram_message(
+            "📌 What do you want to do next?",
+            chat_id=TELEGRAM_CHAT_ID,
+            reply_markup=create_keyboard()
+        )
+
+    except docker.errors.NotFound:
+        send_telegram_message(f"⚠️ *Container {container_name} not found.*", chat_id=TELEGRAM_CHAT_ID)
 
 def process_telegram_updates():
-    """بررسی و پردازش به روز رسانی های تلگرام"""
+    """بررسی و پردازش به‌روزرسانی‌های تلگرام"""
     url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates'
     last_update_id = None
-    
+
     while True:
         try:
             params = {'offset': last_update_id + 1} if last_update_id else {}
             response = requests.get(url, params=params)
             updates = response.json().get('result', [])
-            
-            if updates:
-                print("Received updates:", updates)
 
             for update in updates:
                 update_id = update["update_id"]
-                last_update_id = update_id  # ذخیره آخرین آپدیت پردازش شده
-                
-                # بررسی پیام /start و ارسال دکمه
-                if 'message' in update and 'text' in update['message'] and update['message']['text'] == '/start':
-                    send_telegram_message("👋 Welcome! Click the button below to create a new Shadowsocks account.", reply_markup=create_keyboard())
+                last_update_id = update_id
 
-                # بررسی callback_query برای دریافت دکمه
+                if 'message' in update and 'text' in update['message']:
+                    if update['message']['text'] == '/start':
+                        send_telegram_message(
+                            "👋 Welcome! Click the button below to create a new Shadowsocks account.",
+                            reply_markup=create_keyboard()
+                        )
+                    elif update['message']['text'] == '/admin':
+                        list_active_containers()
+
                 if "callback_query" in update:
                     callback_data = update["callback_query"].get("data")
+
                     if callback_data == "create_shadowsocks":
                         create_and_check_shadowsocks_container()
+                    elif callback_data == "list_containers":
+                        list_active_containers()
+                    elif callback_data.startswith("delete_"):
+                        container_name = callback_data.replace("delete_", "")
+                        delete_container(container_name)
 
             time.sleep(2)
 
         except Exception as e:
-            print(f"❌ Error processing updates: {e}")
             time.sleep(5)
+
+def create_keyboard():
+    """ایجاد دکمه برای مدیریت اکانت‌ها"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "➕ Create Shadowsocks Account", "callback_data": "create_shadowsocks"}],
+            [{"text": "🔧 Manage Containers", "callback_data": "list_containers"}]
+        ]
+    }
+    return keyboard
 
 if __name__ == "__main__":
     process_telegram_updates()
+
