@@ -1,0 +1,12 @@
+[Unit]
+Description=Shadowsocks Telegram Bot
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /root/shadowsocks/create_shadowsocks_user.py
+WorkingDirectory=/root/shadowsocks
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
