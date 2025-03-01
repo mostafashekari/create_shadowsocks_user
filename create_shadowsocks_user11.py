@@ -5,6 +5,7 @@ import requests
 import time
 import re
 import json
+import os
 from datetime import datetime, timedelta
 import subprocess
 
@@ -15,8 +16,25 @@ ADMIN_CHAT_ID = '71228850'
 # تنظیمات Docker
 client = docker.from_env()
 
+# مسیر فایل برای ذخیره expiration_dates
+EXPIRATION_FILE = "expiration_dates.json"
+
+# بارگذاری expiration_dates از فایل یا ایجاد دیکشنری خالی
+def load_expiration_dates():
+    if os.path.exists(EXPIRATION_FILE):
+        with open(EXPIRATION_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+# ذخیره expiration_dates در فایل
+def save_expiration_dates(data):
+    with open(EXPIRATION_FILE, 'w') as f:
+        json.dump(data, f)
+
+# مقداردهی اولیه expiration_dates
+expiration_dates = load_expiration_dates()
+
 user_accounts = {}
-expiration_dates = {}
 
 def generate_random_password(length=16):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
@@ -62,6 +80,7 @@ def delete_shadowsocks_container(container_name):
         container.remove(force=True)
         if container_name in expiration_dates:
             del expiration_dates[container_name]
+            save_expiration_dates(expiration_dates)  # ذخیره بعد از حذف
         return True
     except docker.errors.NotFound:
         return False
@@ -82,6 +101,7 @@ def start_shadowsocks_container(container_name):
 
         new_expiration_date = (datetime.now() + timedelta(days=30)).isoformat()
         expiration_dates[container_name] = new_expiration_date
+        save_expiration_dates(expiration_dates)  # ذخیره بعد از بازسازی
 
         new_container = client.containers.run(
             "shadowsocks/shadowsocks-libev",
@@ -127,6 +147,7 @@ def extend_container_expiration(container_name):
         user_chat_id = container.labels.get("user_id")
         new_expiration_date = (datetime.now() + timedelta(days=30)).isoformat()
         expiration_dates[container_name] = new_expiration_date
+        save_expiration_dates(expiration_dates)  # ذخیره بعد از تمدید
         
         send_telegram_message(
             f"⏳ *تاریخ انقضای `{container_name}` تمدید شد!*\n"
@@ -148,7 +169,16 @@ def check_expired_containers():
     containers = list_shadowsocks_containers()
     for container in containers:
         container_name = container.name
-        expiration_date = datetime.fromisoformat(expiration_dates.get(container_name, "1970-01-01T00:00:00"))
+        expiration_date = expiration_dates.get(container_name, None)
+        if expiration_date is None:
+            default_expiration = (datetime.now() + timedelta(days=30)).isoformat()
+            expiration_dates[container_name] = default_expiration
+            save_expiration_dates(expiration_dates)  # ذخیره تاریخ پیش‌فرض
+            expiration_date = datetime.fromisoformat(default_expiration)
+            print(f"Warning: No expiration date for {container_name}. Set to {default_expiration}")
+        else:
+            expiration_date = datetime.fromisoformat(expiration_date)
+        
         user_chat_id = container.labels.get("user_id")
         remaining_days = (expiration_date - datetime.now()).days
 
@@ -158,13 +188,13 @@ def check_expired_containers():
                 f"⏰ *Container Expired and Stopped*\n\n"
                 f"🔹 *Code:* `{container_name}`\n"
                 f"👤 *User Chat ID:* `{user_chat_id}`\n"
-                f"⏳ *Expiration Date:* `{expiration_date}`",
+                f"⏳ *Expiration Date:* `{expiration_date.isoformat()}`",
                 chat_id=ADMIN_CHAT_ID
             )
             send_telegram_message(
                 f"⏰ *اکانت شما منقضی شد!*\n\n"
                 f"🔹 *Code:* `{container_name}`\n"
-                f"📅 *Expired on:* `{expiration_date}`\n"
+                f"📅 *Expired on:* `{expiration_date.isoformat()}`\n"
                 f"👉 برای تمدید با پشتیبانی تماس بگیرید: [پشتیبانی](https://t.me/filterali_vpn)",
                 chat_id=user_chat_id
             )
@@ -232,6 +262,7 @@ def create_and_check_shadowsocks_container(user_chat_id):
             restart_policy={"Name": "always"}
         )
         expiration_dates[container_name] = expiration_date
+        save_expiration_dates(expiration_dates)  # ذخیره بعد از ساخت کانتینر
         time.sleep(5)
 
         user_message = (
@@ -245,7 +276,7 @@ def create_and_check_shadowsocks_container(user_chat_id):
             f"📡 *ترافیک:* نامحدود\n\n"
             f"⚡ *Enjoy your connection!*"
         )
-        send_telegram_message(user_message, chat_id=user_chat_id)
+        send_telegram_message(user_message, chat_id=user_chat_id, reply_markup=create_keyboard(user_chat_id))
 
         admin_message = (
             f"🔔 *New Shadowsocks Account Created!*\n\n"
@@ -259,7 +290,7 @@ def create_and_check_shadowsocks_container(user_chat_id):
             f"📡 *ترافیک:* نامحدود\n\n"
             f"✅ *Account successfully created.*"
         )
-        send_telegram_message(admin_message, chat_id=ADMIN_CHAT_ID)
+        send_telegram_message(admin_message, chat_id=ADMIN_CHAT_ID, reply_markup=create_keyboard(ADMIN_CHAT_ID))
 
     except Exception as e:
         error_message = f"❌ *Error creating container {container_name}:* `{e}`"
@@ -271,12 +302,17 @@ def get_user_container_status(user_chat_id):
         if container.labels.get("user_id") == str(user_chat_id):
             status = "فعال" if container.status == "running" else "غیرفعال"
             expiration_date = expiration_dates.get(container.name, "نامشخص")
-            remaining_days = (datetime.fromisoformat(expiration_date) - datetime.now()).days
+            if expiration_date != "نامشخص":
+                remaining_days = (datetime.fromisoformat(expiration_date) - datetime.now()).days
+                remaining_text = f"{remaining_days} روز" if remaining_days > 0 else "منقضی شده"
+            else:
+                remaining_days = "نامشخص"
+                remaining_text = "نامشخص"
             return f"🔹 *وضعیت اکانت شما:*\n" \
                    f"🔹 *Code:* `{container.name}`\n" \
                    f"🔹 *وضعیت:* `{status}`\n" \
                    f"⏳ *Expiration:* `{expiration_date}`\n" \
-                   f"⏳ *روزهای باقی‌مونده:* `{remaining_days if remaining_days > 0 else 'منقضی شده'}`\n" \
+                   f"⏳ *روزهای باقی‌مونده:* `{remaining_text}`\n" \
                    f"📡 *ترافیک:* نامحدود"
     return "❌ شما اکانتی ندارید!"
 
