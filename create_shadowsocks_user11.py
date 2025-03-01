@@ -364,12 +364,15 @@ def process_telegram_updates():
                                     remaining_days = "نامشخص"
                                     remaining_text = "نامشخص"
                                 message += f"🔹 `{container.name}` ({status}) - انقضا: `{expiration_date}` ({remaining_text})\n"
-                                row = [{"text": f"⏳ Extend {container.name}", "callback_data": f"extend_{container.name}"}]
+                                # استخراج شماره از نام کانتینر
+                                match = re.match(r"^shadowsocks_(\d+)$", container.name)
+                                container_number = match.group(1) if match else "N/A"
+                                row = [{"text": f"⏳ Extend {container_number}", "callback_data": f"extend_{container.name}"}]
                                 if container.status == "running":
-                                    row.append({"text": f"🛑 Stop {container.name}", "callback_data": f"stop_{container.name}"})
+                                    row.append({"text": f"🛑 Stop {container_number}", "callback_data": f"stop_{container.name}"})
                                 else:
-                                    row.append({"text": f"▶️ Start {container.name}", "callback_data": f"start_{container.name}"})
-                                row.append({"text": f"🗑 Delete {container.name}", "callback_data": f"delete_{container.name}"})
+                                    row.append({"text": f"▶️ Start {container_number}", "callback_data": f"start_{container.name}"})
+                                row.append({"text": f"🗑 Delete {container_number}", "callback_data": f"delete_{container.name}"})
                                 buttons.append(row)
                             send_telegram_message(message, chat_id=ADMIN_CHAT_ID, reply_markup={"inline_keyboard": buttons})
                         else:
