@@ -13,6 +13,7 @@ import logging
 import aiohttp
 import asyncio
 
+usdt_price_last_clicked = {}
 
 # تنظیمات تلگرام
 TELEGRAM_BOT_TOKEN = '8167962294:AAF3Y2AqbvAmHe7WvB4GOzUIGqmxNFSCgQQ'
@@ -504,27 +505,30 @@ def process_telegram_updates():
                         active_count = count_shadowsocks_containers()
                         send_telegram_message(f"📊 *تعداد کانتینرهای فعال:* `{active_count}`", chat_id=ADMIN_CHAT_ID, reply_markup=create_keyboard(ADMIN_CHAT_ID))
 
-                    elif callback_data.startswith("extend_") and str(chat_id) == ADMIN_CHAT_ID:
-                        container_name = callback_data.split("_", 1)[1]
-                        success, msg = extend_container_expiration(container_name)
-                        if success:
-                            send_telegram_message(f"✅ `{container_name}` با موفقیت تمدید شد.\n{msg}", chat_id=ADMIN_CHAT_ID)
-                        else:
-                            send_telegram_message(f"❌ خطا: {msg}", chat_id=ADMIN_CHAT_ID)
-                        active_count = count_shadowsocks_containers()
-                        send_telegram_message(f"📊 *تعداد کانتینرهای فعال:* `{active_count}`", chat_id=ADMIN_CHAT_ID, reply_markup=create_keyboard(ADMIN_CHAT_ID))
-                        
                     elif callback_data == "show_usdt_price":
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        price = loop.run_until_complete(fetch_usdt_price())
-                        formatted_price = format_price(price) if price else "خطا در دریافت قیمت"
+                        now = time.time()
+                        last_clicked = usdt_price_last_clicked.get(chat_id, 0)
 
-                        send_telegram_message(
-                            f"💳 قیمت لحظه‌ای تتر:\n{formatted_price}",
-                            chat_id=chat_id
-                        )
-                        answer_callback_query(callback_query_id, "✅ قیمت لحظه‌ای ارسال شد.")
+                        if now - last_clicked >= 100:
+                            usdt_price_last_clicked[chat_id] = now
+
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            price = loop.run_until_complete(fetch_usdt_price())
+                            formatted_price = format_price(price) if price else "خطا در دریافت قیمت"
+
+                            send_telegram_message(
+                                f"💳 قیمت لحظه‌ای تتر:\n{formatted_price}",
+                                chat_id=chat_id
+                            )
+                            answer_callback_query(callback_query_id, "✅ قیمت لحظه‌ای ارسال شد.")
+                        else:
+                            remaining_seconds = int(100 - (now - last_clicked))
+                            answer_callback_query(
+                                callback_query_id,
+                                f"⏳ لطفاً {remaining_seconds} ثانیه دیگر دوباره تلاش کنید."
+                            )
+
 
                     elif callback_data == "help_connection":
                         connection_instructions = (
