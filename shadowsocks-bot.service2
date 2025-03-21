@@ -1,0 +1,15 @@
+[Unit]
+Description=Shadowsocks Telegram Bot
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /root/shadowsocks/create_shadowsocks_user.py
+WorkingDirectory=/root/shadowsocks
+Restart=always
+RestartSec=5  # ری‌استارت بعد از 5 ثانیه
+User=root
+Environment="PYTHONUNBUFFERED=1"  # جلوگیری از بافر شدن خروجی
+TimeoutStopSec=10  # مهلت 10 ثانیه‌ای برای توقف
+
+[Install]
+WantedBy=multi-user.target
